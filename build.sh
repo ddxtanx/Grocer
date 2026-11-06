@@ -45,6 +45,11 @@ cargo build $CARGO_PROFILE -p grocer-server
 echo "==> cargo build -p grocer-wasm ($WASM_TARGET, release)"
 cargo build -q -p grocer-wasm --target "$WASM_TARGET" --release
 
+if [ -f vendor.lock ]; then
+  echo "==> verifying vendor assets (ocr engine integrity)"
+  (cd crates/grocer-server/static/vendor && sha256sum -c "$PWD/../../../../vendor.lock")
+fi
+
 echo "==> linking wasm -> $WASM_DEST"
 cp "$WASM_OUT" "$WASM_DEST"
 

@@ -81,13 +81,14 @@ $('#photo').addEventListener('change', () => { $('#ocrbtn').disabled = !$('#phot
 $('#ocrbtn').addEventListener('click', async () => {
   const file = $('#photo').files[0]; if (!file) return;
   try {
+    console.info('tesseract.js', Tesseract.version);
     status('#scanstatus', 'Starting OCR engine (~11 MB language pack, first run)…');
     ocrWorker = await Tesseract.createWorker('eng', 1, {
       workerPath: '/vendor/worker.min.js',
       // plain same-origin worker: blob-URL workers (tesseract's default)
       // trip Firefox fingerprinting-resistance / strict privacy settings
       workerBlobURL: false,
-      corePath: '/vendor/',
+      corePath: '/vendor/tesseract-core-simd.wasm.js',
       langPath: '/vendor/tessdata',
       cacheMethod: 'none',
       logger: m => status('#scanstatus', 'OCR: ' + (m.status || m.progress || '')),
@@ -299,9 +300,9 @@ $('#st-photo').addEventListener('change', async () => {
   const file = $('#st-photo').files[0]; if (!file) return;
   try {
     status('#st-status', 'OCR’ing tag…');
-    const w = await Tesseract.createWorker('eng', 7, {
+    const w = await Tesseract.createWorker('eng', 1, {
       workerPath: '/vendor/worker.min.js',
-      workerBlobURL: false, corePath: '/vendor/', langPath: '/vendor/tessdata',
+      workerBlobURL: false, corePath: '/vendor/tesseract-core-simd.wasm.js', langPath: '/vendor/tessdata',
       cacheMethod: 'none', logger: m => status('#st-status', 'tag OCR: ' + (m.status || '')),
     });
     const { data: { text } } = await w.recognize(file);
