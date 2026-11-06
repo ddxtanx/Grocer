@@ -3,3 +3,4 @@ target/
 cookies.txt
 .env
 crates/grocer-server/static/test_*.jpg
+crates/grocer-server/static/grocer-parser.wasm
