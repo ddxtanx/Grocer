@@ -52,26 +52,23 @@ pub async fn search_products(
     _authed: Authed,
     Query(s): Query<SearchQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let rows = match &s.q {
-        Some(q) if !q.is_empty() => {
-            sqlx::query(
+    let rows =
+        match &s.q {
+            Some(q) if !q.is_empty() => sqlx::query(
                 "SELECT id, name, brand, category, upc, pack_size::float8 AS pack_size, size_unit
                  FROM products
                  WHERE name ILIKE $1 OR brand ILIKE $1 ORDER BY name LIMIT 50",
             )
             .bind(format!("%{q}%"))
             .fetch_all(&st.pool)
-            .await?
-        }
-        _ => {
-            sqlx::query(
+            .await?,
+            _ => sqlx::query(
                 "SELECT id, name, brand, category, upc, pack_size::float8 AS pack_size, size_unit
                  FROM products ORDER BY id DESC LIMIT 50",
             )
             .fetch_all(&st.pool)
-            .await?
-        }
-    };
+            .await?,
+        };
     let out: Vec<_> = rows
         .iter()
         .map(|r| {

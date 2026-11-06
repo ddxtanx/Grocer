@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/grocer-parser", "crates/grocer-server", "crates/grocer-wasm"]
+members = ["crates/grocer-parser", "crates/grocer-server", "crates/grocer-wasm", "crates/grocer-scraper"]
 
 [workspace.package]
 version = "0.1.0"
