@@ -612,10 +612,12 @@ pub async fn price_history(
     };
     let rows = if let Some(pid) = product_id {
         sqlx::query(
-            "SELECT o.id, o.unit_price_cents, o.qty_count, o.observed_at, o.source,
-                    s.name AS store, c.name AS chain
+            "SELECT o.id, o.unit_price_cents, o.qty_count, o.qty_grams::float8 AS qty_grams,
+                    o.observed_at, o.source, s.name AS store, c.name AS chain,
+                    p.pack_size::float8 AS pack_size, p.size_unit
              FROM price_observations o
              JOIN stores s ON s.id=o.store_id JOIN chains c ON c.id=o.chain_id
+             LEFT JOIN products p ON p.id=o.product_id
              WHERE o.product_id=$1 ORDER BY o.observed_at DESC LIMIT 200",
         )
         .bind(pid)
@@ -623,10 +625,12 @@ pub async fn price_history(
         .await?
     } else if let Some(code) = &q.store_item_code {
         sqlx::query(
-            "SELECT o.id, o.unit_price_cents, o.qty_count, o.observed_at, o.source,
-                    s.name AS store, c.name AS chain
+            "SELECT o.id, o.unit_price_cents, o.qty_count, o.qty_grams::float8 AS qty_grams,
+                    o.observed_at, o.source, s.name AS store, c.name AS chain,
+                    p.pack_size::float8 AS pack_size, p.size_unit
              FROM price_observations o
              JOIN stores s ON s.id=o.store_id JOIN chains c ON c.id=o.chain_id
+             LEFT JOIN products p ON p.id=o.product_id
              WHERE o.store_item_code=$1 ORDER BY o.observed_at DESC LIMIT 200",
         )
         .bind(code)
@@ -640,9 +644,27 @@ pub async fn price_history(
     let out: Vec<_> = rows
         .iter()
         .map(|r| {
+            // Normalized comparison basis: cents per 100 g/ml. Prefer the
+            // observation's own weight (receipt weight items), else the
+            // canonical product's pack size.
+            let unit = r.get::<i64, _>("unit_price_cents");
+            let grams = r
+                .get::<Option<f64>, _>("qty_grams")
+                .filter(|g| *g > 0.0)
+                .or_else(|| {
+                    let pack = r.get::<Option<f64>, _>("pack_size")?;
+                    matches!(
+                        r.get::<Option<String>, _>("size_unit").as_deref(),
+                        Some("g") | Some("ml")
+                    )
+                    .then_some(pack)
+                    .filter(|p| *p > 0.0)
+                });
+            let per100 = grams.map(|g| (unit as f64 * 100.0 / g).round() as i64);
             json!({
-                "unit_price_cents": r.get::<i64,_>("unit_price_cents"),
+                "unit_price_cents": unit,
                 "qty": r.get::<Option<i32>,_>("qty_count"),
+                "price_per_100": per100,
                 "observed_at": r.get::<String,_>("observed_at"),
                 "source": r.get::<String,_>("source"),
                 "store": r.get::<String,_>("store"),
@@ -794,13 +816,22 @@ pub async fn build_plan(
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query(
         "SELECT DISTINCT ON (i.product_id) i.product_id, p.name, i.qty,
-                o.unit_price_cents, o.store_id, s.name AS store
+                o.unit_price_cents, o.store_id, s.name AS store,
+                o.qty_grams::float8 AS qty_grams, p.pack_size::float8 AS pack_size, p.size_unit
          FROM shopping_list_items i
          JOIN products p ON p.id = i.product_id
          JOIN price_observations o ON o.product_id = i.product_id
          JOIN stores s ON s.id = o.store_id
          WHERE i.list_id=$1
-         ORDER BY i.product_id, o.unit_price_cents ASC, o.observed_at DESC",
+         ORDER BY i.product_id,
+             CASE
+               WHEN o.qty_grams IS NOT NULL AND o.qty_grams > 0
+                 THEN o.unit_price_cents::float8 / (o.qty_grams / 100.0)
+               WHEN p.size_unit IN ('g','ml') AND p.pack_size IS NOT NULL AND p.pack_size > 0
+                 THEN o.unit_price_cents::float8 / (p.pack_size / 100.0)
+               ELSE o.unit_price_cents::float8
+             END ASC,
+             o.observed_at DESC",
     )
     .bind(list_id)
     .fetch_all(&st.pool)
@@ -836,6 +867,19 @@ pub async fn build_plan(
         let qty: i32 = r.get("qty");
         let price: i64 = r.get("unit_price_cents");
         total += price * qty as i64;
+        let grams = r
+            .get::<Option<f64>, _>("qty_grams")
+            .filter(|g| *g > 0.0)
+            .or_else(|| {
+                let pack = r.get::<Option<f64>, _>("pack_size")?;
+                matches!(
+                    r.get::<Option<String>, _>("size_unit").as_deref(),
+                    Some("g") | Some("ml")
+                )
+                .then_some(pack)
+                .filter(|p| *p > 0.0)
+            });
+        let per100 = grams.map(|g| (price as f64 * 100.0 / g).round() as i64);
         sqlx::query(
             "INSERT INTO plan_items (plan_id, product_id, store_id, qty, unit_price_cents)
              VALUES ($1,$2,$3,$4,$5)",
@@ -852,6 +896,7 @@ pub async fn build_plan(
             "store": r.get::<String,_>("store"),
             "qty": qty,
             "unit_price_cents": price,
+            "price_per_100": per100,
         }));
     }
     for (pos, store_id) in stop_order.iter().enumerate() {

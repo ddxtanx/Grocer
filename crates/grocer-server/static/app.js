@@ -5,7 +5,14 @@ const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;
 const money = c => c == null ? '' : (c / 100).toFixed(2);
 const toCents = v => { const x = parseFloat(String(v).replace(/[$,]/g, '')); return Number.isFinite(x) ? Math.round(x * 100) : null; };
 async function api(path, opts = {}) {
-  const res = await fetch(path, { credentials: 'same-origin', headers: { 'content-type': 'application/json' }, ...opts });
+  let res;
+  try {
+    res = await fetch(path, { credentials: 'same-origin', headers: { 'content-type': 'application/json' }, ...opts });
+  } catch (e) {
+    const err = new Error('network unavailable');
+    err.network = true;
+    throw err;
+  }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || res.statusText);
   return body;
@@ -40,6 +47,7 @@ $('#who').innerHTML = esc(me.username) + ' · <a href="#" onclick="location.relo
   STORES = await api('/api/stores');
   fillStoreSelects();
   showTab('scan');
+  syncPending().catch(() => {});
 }
 
 // ---- tabs ----
@@ -162,14 +170,71 @@ async function saveReceipt() {
   P.tax_cents = toCents($('#rv-tax').value);
   P.total_cents = toCents($('#rv-tot').value);
   P.occurred_at = $('#rv-when').value || null;
+  const payload = { store_id: sid, receipt: P };
   try {
     const trip = await api('/api/trips', { method: 'POST', body: JSON.stringify({ store_id: sid, occurred_at: P.occurred_at || new Date().toISOString() }) });
     const out = await api('/api/receipts', { method: 'POST', body: JSON.stringify({ trip_id: trip.id, store_id: sid, receipt: P }) });
     toast(out.deduplicated ? `Already scanned (receipt #${out.receipt_id})` :
       `Saved receipt #${out.receipt_id}` + (out.issues.length ? ` — notes: ${out.issues.join(' | ')}` : ''));
     P = null; $('#review').innerHTML = '';
-  } catch (e) { toast('Rejected: ' + e.message, 8000); }
+  } catch (e) {
+    if (e.network) {
+      await queueReceipt(payload);
+      toast('Offline: receipt queued on this device — it will upload when you are back online.', 6000);
+      P = null; $('#review').innerHTML = '';
+    } else {
+      toast('Rejected: ' + e.message, 8000);
+    }
+  }
 }
+
+// ---- offline queue: scanned+parsed receipts live in IndexedDB until the
+// network returns; the raw image was never kept, only the reviewed JSON. ----
+function idb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('grocer-queue', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('pending', { keyPath: 'k', autoIncrement: true });
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function queueReceipt(payload) {
+  const db = await idb();
+  await new Promise((res, rej) => {
+    const tx = db.transaction('pending', 'readwrite');
+    tx.objectStore('pending').add({ payload, queued_at: new Date().toISOString() });
+    tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+  });
+}
+async function syncPending() {
+  if (!navigator.onLine) return;
+  const db = await idb();
+  const rows = await new Promise((res, rej) => {
+    const req = db.transaction('pending').objectStore('pending').getAll();
+    req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error);
+  });
+  if (!rows.length) return;
+  toast(`${rows.length} queued receipt(s) — syncing…`);
+  for (const row of rows) {
+    try {
+      const trip = await api('/api/trips', { method: 'POST', body: JSON.stringify({ store_id: row.payload.store_id, occurred_at: row.payload.receipt.occurred_at || new Date().toISOString() }) });
+      const out = await api('/api/receipts', { method: 'POST', body: JSON.stringify({ trip_id: trip.id, store_id: row.payload.store_id, receipt: row.payload.receipt }) });
+      await new Promise((res, rej) => {
+        const tx = db.transaction('pending', 'readwrite');
+        tx.objectStore('pending').delete(row.k);
+        tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+      });
+      toast(`Synced queued receipt (id ${out.receipt_id}${out.deduplicated ? ', dedup' : ''})`);
+    } catch (e) {
+      if (e.network) return; // still offline; stop trying, keep the queue
+      // server rejected it (arithmetic 422 etc.) — keep the row and report,
+      // the user can edit it by re-opening the photo.
+      toast(`Queued receipt rejected: ${e.message}`, 8000);
+    }
+  }
+}
+window.addEventListener('online', syncPending);
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 // ================= RECEIPTS TAB =================
 async function loadReceipts() {
@@ -252,8 +317,10 @@ $('#st-save').addEventListener('click', async () => {
   toast(`Shelf price recorded (check #${out.id}, product ${out.resolved_product_id ?? 'unresolved'})`);
   if (body.upc) {
     const hist = await api('/api/prices?upc=' + encodeURIComponent(body.upc));
-    $('#st-history').innerHTML = hist.length ? '<h4>Known prices for this UPC</h4><table><tr><th>Store</th><th>Unit</th><th>When</th><th>Src</th></tr>' +
-      hist.map(h => `<tr><td>${esc(h.store)}</td><td>$${money(h.unit_price_cents)}</td><td>${esc(h.observed_at)}</td><td>${esc(h.source)}</td></tr>`).join('') + '</table>' : '';
+    $('#st-history').innerHTML = hist.length ? '<h4>Known prices for this UPC</h4><table><tr><th>Store</th><th>Unit</th><th>per 100g/ml</th><th>When</th><th>Src</th></tr>' +
+      hist.map(h => `<tr><td>${esc(h.store)}</td><td>$${money(h.unit_price_cents)}</td>
+        <td>${h.price_per_100 != null ? (h.price_per_100 / 100).toFixed(2) : '—'}</td>
+        <td>${esc(h.observed_at)}</td><td>${esc(h.source)}</td></tr>`).join('') + '</table>' : '';
   }
 });
 $('#st-integrity').addEventListener('click', async () => {
