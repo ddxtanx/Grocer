@@ -72,13 +72,13 @@ pub async fn login(
     State(st): State<AppState>,
     Json(c): Json<Cred>,
 ) -> ApiResult<(StatusCode, HeaderMap, Json<serde_json::Value>)> {
-    let row = sqlx::query_as::<_, (i64, String)>("SELECT id, pass_hash FROM users WHERE username=$1")
-        .bind(&c.username)
-        .fetch_optional(&st.pool)
-        .await?;
+    let row =
+        sqlx::query_as::<_, (i64, String)>("SELECT id, pass_hash FROM users WHERE username=$1")
+            .bind(&c.username)
+            .fetch_optional(&st.pool)
+            .await?;
     let (uid, hash) = row.ok_or_else(|| AppError::Unauthorized("bad credentials".into()))?;
-    let parsed = PasswordHash::new(&hash)
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let parsed = PasswordHash::new(&hash).map_err(|e| AppError::Internal(e.to_string()))?;
     Argon2::default()
         .verify_password(c.password.as_bytes(), &parsed)
         .map_err(|_| AppError::Unauthorized("bad credentials".into()))?;

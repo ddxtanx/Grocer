@@ -1,0 +1,11 @@
+[package]
+name = "grocer-wasm"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+grocer-parser = { path = "../grocer-parser" }
+serde_json.workspace = true

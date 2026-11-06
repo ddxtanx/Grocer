@@ -20,6 +20,118 @@ fn chain_parser_key(c: Chain) -> Option<&'static str> {
     }
 }
 
+// ---------- parse_text (provisional home of the parser) ----------
+//
+// Until the sandbox has the wasm32 target (rust-wasm package) and the parser
+// runs in-browser via WASM, the client posts OCR text here and gets back the
+// structured ParsedReceipt. Same crate, same code — only the execution
+// location differs, and the client flips to WASM by deleting this round-trip.
+
+#[derive(Deserialize)]
+pub struct ParseTextReq {
+    pub raw_text: String,
+}
+
+pub async fn parse_text(
+    State(_st): State<AppState>,
+    _authed: Authed,
+    Json(p): Json<ParseTextReq>,
+) -> ApiResult<Json<ParsedReceipt>> {
+    Ok(Json(grocer_parser::parse(&p.raw_text)))
+}
+
+// ---------- product search & unlinked items (catalog curation UI) ----------
+
+#[derive(Deserialize)]
+pub struct SearchQuery {
+    pub q: Option<String>,
+}
+
+pub async fn search_products(
+    State(st): State<AppState>,
+    _authed: Authed,
+    Query(s): Query<SearchQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let rows = match &s.q {
+        Some(q) if !q.is_empty() => {
+            sqlx::query(
+                "SELECT id, name, brand, category, upc, pack_size::float8 AS pack_size, size_unit
+                 FROM products
+                 WHERE name ILIKE $1 OR brand ILIKE $1 ORDER BY name LIMIT 50",
+            )
+            .bind(format!("%{q}%"))
+            .fetch_all(&st.pool)
+            .await?
+        }
+        _ => {
+            sqlx::query(
+                "SELECT id, name, brand, category, upc, pack_size::float8 AS pack_size, size_unit
+                 FROM products ORDER BY id DESC LIMIT 50",
+            )
+            .fetch_all(&st.pool)
+            .await?
+        }
+    };
+    let out: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<i64,_>("id"),
+                "name": r.get::<String,_>("name"),
+                "brand": r.get::<Option<String>,_>("brand"),
+                "category": r.get::<Option<String>,_>("category"),
+                "upc": r.get::<Option<String>,_>("upc"),
+                "pack_size": r.get::<Option<f64>,_>("pack_size"),
+                "size_unit": r.get::<Option<String>,_>("size_unit"),
+            })
+        })
+        .collect();
+    Ok(Json(json!(out)))
+}
+
+/// Receipt lines not yet tied to a canonical product — the work queue for
+/// catalog curation, with existing mapping candidates attached.
+pub async fn unlinked_items(
+    State(st): State<AppState>,
+    _authed: Authed,
+) -> ApiResult<Json<serde_json::Value>> {
+    let rows = sqlx::query(
+        "SELECT ri.id, ri.raw_name, ri.store_item_code, ri.unit_price_cents,
+                c.name AS chain, s.name AS store, r.occurred_at,
+                COALESCE(
+                    (SELECT json_agg(json_build_object('product_id', m.product_id,
+                        'confirmations', m.confirmations))
+                     FROM store_item_map m
+                     WHERE m.chain_id = r.chain_id AND m.store_item_code = ri.store_item_code),
+                    '[]'::json) AS candidates
+         FROM receipt_items ri
+         JOIN receipts r ON r.id = ri.receipt_id
+         JOIN stores s ON s.id = r.store_id
+         JOIN chains c ON c.id = r.chain_id
+         WHERE ri.product_id IS NULL AND ri.discount_ref IS NULL
+           AND ri.unit_price_cents IS NOT NULL
+         ORDER BY r.occurred_at DESC NULLS LAST LIMIT 100",
+    )
+    .fetch_all(&st.pool)
+    .await?;
+    let out: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "item_id": r.get::<i64,_>("id"),
+                "raw_name": r.get::<String,_>("raw_name"),
+                "store_item_code": r.get::<Option<String>,_>("store_item_code"),
+                "unit_price_cents": r.get::<Option<i64>,_>("unit_price_cents"),
+                "chain": r.get::<String,_>("chain"),
+                "store": r.get::<String,_>("store"),
+                "occurred_at": r.get::<Option<String>,_>("occurred_at"),
+                "candidates": r.get::<serde_json::Value,_>("candidates"),
+            })
+        })
+        .collect();
+    Ok(Json(json!(out)))
+}
+
 // ---------- stores ----------
 
 pub async fn list_stores(
@@ -72,7 +184,31 @@ pub async fn create_trip(
     Ok((StatusCode::CREATED, Json(json!({ "id": row.0 }))))
 }
 
-// ---------- receipt ingest ----------
+pub async fn my_trips(
+    State(st): State<AppState>,
+    authed: Authed,
+) -> ApiResult<Json<serde_json::Value>> {
+    let rows = sqlx::query(
+        "SELECT t.id, t.occurred_at, s.name AS store, s.id AS store_id
+         FROM trips t JOIN stores s ON s.id = t.store_id
+         WHERE t.user_id=$1 ORDER BY t.occurred_at DESC LIMIT 50",
+    )
+    .bind(authed.user_id)
+    .fetch_all(&st.pool)
+    .await?;
+    let out: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<i64,_>("id"),
+                "occurred_at": r.get::<String,_>("occurred_at"),
+                "store": r.get::<String,_>("store"),
+                "store_id": r.get::<i64,_>("store_id"),
+            })
+        })
+        .collect();
+    Ok(Json(json!(out)))
+}
 
 #[derive(Deserialize)]
 pub struct IngestReq {
@@ -131,7 +267,9 @@ pub async fn ingest_receipt(
             .fetch_optional(&st.pool)
             .await?
             .ok_or_else(|| {
-                AppError::NotFound(format!("unknown store {key}/{store_ref} — register it first"))
+                AppError::NotFound(format!(
+                    "unknown store {key}/{store_ref} — register it first"
+                ))
             })?
             .0
         }
@@ -255,7 +393,10 @@ pub async fn ingest_receipt(
     }
     tx.commit().await?;
 
-    let soft: Vec<String> = issues.iter().map(|i| format!("{:?}: {}", i.kind, i.detail)).collect();
+    let soft: Vec<String> = issues
+        .iter()
+        .map(|i| format!("{:?}: {}", i.kind, i.detail))
+        .collect();
     Ok((
         StatusCode::CREATED,
         Json(IngestResp {
@@ -306,8 +447,8 @@ pub async fn receipt_detail(
         .await?
         .ok_or_else(|| AppError::NotFound("receipt not found".into()))?;
     let items = sqlx::query(
-        "SELECT id, seq, raw_name, store_item_code, qty_count, qty_grams, unit_price_cents,
-                line_total_cents, savings_cents, product_id FROM receipt_items
+        "SELECT id, seq, raw_name, store_item_code, qty_count, qty_grams::float8 AS qty_grams,
+                unit_price_cents, line_total_cents, savings_cents, product_id FROM receipt_items
          WHERE receipt_id=$1 ORDER BY seq",
     )
     .bind(id)
@@ -461,18 +602,16 @@ pub async fn price_history(
 ) -> ApiResult<Json<serde_json::Value>> {
     let product_id = match q.product_id {
         Some(p) => Some(p),
-        None => {
-            match &q.upc {
-                Some(upc) => sqlx::query_as::<_, (i64,)>(
-                    "SELECT product_id FROM barcode_links WHERE upc=$1",
-                )
-                .bind(upc)
-                .fetch_optional(&st.pool)
-                .await
-                .map(|r| r.map(|x| x.0))?,
-                None => None,
+        None => match &q.upc {
+            Some(upc) => {
+                sqlx::query_as::<_, (i64,)>("SELECT product_id FROM barcode_links WHERE upc=$1")
+                    .bind(upc)
+                    .fetch_optional(&st.pool)
+                    .await
+                    .map(|r| r.map(|x| x.0))?
             }
-        }
+            None => None,
+        },
     };
     let rows = if let Some(pid) = product_id {
         sqlx::query(
@@ -577,7 +716,7 @@ pub async fn fridge_expiring(
 ) -> ApiResult<Json<serde_json::Value>> {
     let days: i32 = q.get("days").and_then(|d| d.parse().ok()).unwrap_or(7);
     let rows = sqlx::query(
-        "SELECT f.id, p.name, f.qty, f.expires_at, (f.expires_at - CURRENT_DATE) AS days_left
+        "SELECT f.id, f.product_id, p.name, f.qty, f.expires_at, (f.expires_at - CURRENT_DATE) AS days_left
          FROM fridge_items f JOIN products p ON p.id=f.product_id
          WHERE f.user_id=$1 AND f.consumed_at IS NULL AND f.expires_at <= CURRENT_DATE + $2::int
          ORDER BY f.expires_at",
@@ -591,6 +730,7 @@ pub async fn fridge_expiring(
         .map(|r| {
             json!({
                 "id": r.get::<i64,_>("id"),
+                "product_id": r.get::<i64,_>("product_id"),
                 "product": r.get::<String,_>("name"),
                 "qty": r.get::<i32,_>("qty"),
                 "days_left": r.get::<i32,_>("days_left"),
@@ -678,15 +818,16 @@ pub async fn build_plan(
     .await?;
 
     if rows.is_empty() {
-        return Err(AppError::Unprocessable("no priced observations for this list".into()));
+        return Err(AppError::Unprocessable(
+            "no priced observations for this list".into(),
+        ));
     }
     let mut tx = st.pool.begin().await?;
-    let plan = sqlx::query_as::<_, (i64,)>(
-        "INSERT INTO trip_plans (list_id) VALUES ($1) RETURNING id",
-    )
-    .bind(list_id)
-    .fetch_one(&mut *tx)
-    .await?;
+    let plan =
+        sqlx::query_as::<_, (i64,)>("INSERT INTO trip_plans (list_id) VALUES ($1) RETURNING id")
+            .bind(list_id)
+            .fetch_one(&mut *tx)
+            .await?;
     let mut total = 0i64;
     let mut stop_order: Vec<i64> = Vec::new();
     let mut items_out = Vec::new();
@@ -731,10 +872,7 @@ pub async fn build_plan(
         .await?;
     tx.commit().await?;
 
-    let missing_names: Vec<String> = missing
-        .iter()
-        .map(|r| r.get("name"))
-        .collect();
+    let missing_names: Vec<String> = missing.iter().map(|r| r.get("name")).collect();
     Ok((
         StatusCode::CREATED,
         Json(json!({
@@ -767,13 +905,13 @@ pub async fn create_price_check(
     // resolve product via direct id or UPC -> barcode_links
     let product_id = match (p.product_id, &p.upc) {
         (Some(id), _) => Some(id),
-        (None, Some(upc)) => sqlx::query_as::<_, (i64,)>(
-            "SELECT product_id FROM barcode_links WHERE upc=$1",
-        )
-        .bind(upc)
-        .fetch_optional(&st.pool)
-        .await
-        .map(|r| r.map(|x| x.0))?,
+        (None, Some(upc)) => {
+            sqlx::query_as::<_, (i64,)>("SELECT product_id FROM barcode_links WHERE upc=$1")
+                .bind(upc)
+                .fetch_optional(&st.pool)
+                .await
+                .map(|r| r.map(|x| x.0))?
+        }
         _ => None,
     };
     let row = sqlx::query_as::<_, (i64,)>(
@@ -849,5 +987,7 @@ pub async fn trip_price_integrity(
             })
         })
         .collect();
-    Ok(Json(json!({ "verdicts": verdicts, "unmatched_checks": unmatched })))
+    Ok(Json(
+        json!({ "verdicts": verdicts, "unmatched_checks": unmatched }),
+    ))
 }

@@ -113,6 +113,7 @@ fn fresh_thyme_departs_two_line_items_and_savings() {
     let text = include_str!("fixtures/freshthyme_905.txt");
     let r = parse(text);
     assert_eq!(r.chain, Chain::FreshThyme);
+    assert_eq!(r.store_ref.as_deref(), Some("00905"));
     assert_eq!(r.occurred_at.as_deref(), Some("2025-01-27T19:34:01"));
     assert_eq!(r.txn_ref.as_deref(), Some("126104"));
 

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grocer</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>Grocer</h1>
+  <nav id="tabs" hidden>
+    <button data-tab="scan" class="on">Scan</button>
+    <button data-tab="receipts">Receipts</button>
+    <button data-tab="shelftag">Shelf&nbsp;tag</button>
+    <button data-tab="fridge">Fridge</button>
+    <button data-tab="lists">Lists</button>
+    <button data-tab="catalog">Catalog</button>
+  </nav>
+  <span id="who"></span>
+</header>
+
+<section id="auth">
+  <form id="authform">
+    <input id="username" placeholder="username" autocomplete="username" required>
+    <input id="password" type="password" placeholder="password" autocomplete="current-password" required>
+    <button type="submit" data-mode="login">Log in</button>
+    <button type="button" id="regbtn">Register</button>
+  </form>
+</section>
+
+<main hidden>
+<!-- ============ SCAN ============ -->
+<div class="tab" id="tab-scan">
+  <input type="file" id="photo" accept="image/*">
+  <div id="scanstatus"></div>
+  <div><button id="ocrbtn" disabled>Run OCR</button></div>
+  <textarea id="rawtext" rows="12" placeholder="OCR text appears here; you can paste/fix it by hand"></textarea>
+  <div><button id="parsebtn" disabled>Parse template</button></div>
+  <div id="review"></div>
+</div>
+
+<!-- ============ RECEIPTS ============ -->
+<div class="tab" id="tab-receipts" hidden>
+  <div id="receiptlist"></div>
+  <div id="receiptdetail"></div>
+</div>
+
+<!-- ============ SHELF TAG ============ -->
+<div class="tab" id="tab-shelftag" hidden>
+  <p>Scan the product barcode, photograph the price tag, and the receipt you
+  scan later tells you whether the register charged the advertised price.</p>
+  <label>UPC <input id="st-upc" placeholder="040441918894">
+    <button id="st-scanbar">Scan barcode</button></label>
+  <div><video id="st-video" width="240" hidden></video></div>
+  <label>Tag photo <input type="file" id="st-photo" accept="image/*"></label>
+  <div id="st-status"></div>
+  <div id="st-cands"></div>
+  <label>Store <select id="st-store"></select></label>
+  <label>Link to trip <select id="st-trip"><option value="">— none yet —</option></select></label>
+  <div><button id="st-save">Record shelf price</button></div>
+  <div id="st-history"></div>
+  <div><button id="st-integrity">Check trip vs receipt</button></div>
+  <div id="st-verdicts"></div>
+</div>
+
+<!-- ============ FRIDGE ============ -->
+<div class="tab" id="tab-fridge" hidden>
+  <h3>Expiring soon</h3>
+  <div id="fridge-expiring"></div>
+  <button id="restockbtn">Add expiring items to list →</button>
+  <h3>Add manually</h3>
+  <div id="fridge-add">
+    <input id="fa-search" placeholder="search product…" list="fa-prodl">
+    <datalist id="fa-prodl"></datalist>
+    <input id="fa-qty" type="number" value="1" min="1" style="width:4em">
+    <input id="fa-days" placeholder="override days">
+    <button id="fa-add">Add</button>
+  </div>
+</div>
+
+<!-- ============ LISTS ============ -->
+<div class="tab" id="tab-lists" hidden>
+  <div><input id="ls-name" placeholder="new list name"> <button id="ls-new">Create</button></div>
+  <div id="ls-body"></div>
+</div>
+
+<!-- ============ CATALOG ============ -->
+<div class="tab" id="tab-catalog" hidden>
+  <h3>Unlinked receipt lines</h3>
+  <div id="cat-unlinked"></div>
+  <h3>Create canonical product</h3>
+  <div id="cat-new">
+    <input id="cn-name" placeholder="name">
+    <input id="cn-brand" placeholder="brand">
+    <input id="cn-cat" placeholder="category (produce, dairy…)">
+    <input id="cn-upc" placeholder="UPC (optional)">
+    <input id="cn-size" placeholder="pack size">
+    <input id="cn-unit" placeholder="g / ml / ea" style="width:5em">
+    <button id="cn-create">Create</button>
+  </div>
+</div>
+</main>
+
+<div id="toast"></div>
+<script src="/vendor/tesseract.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

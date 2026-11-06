@@ -71,6 +71,13 @@ pub fn parse(text: &str) -> ParsedReceipt {
             r.txn_ref = find_int(l).map(|v| v.to_string());
             continue;
         }
+        if up.starts_with("STORE:") {
+            let num: String = l[6..].chars().take_while(|c| c.is_ascii_digit()).collect();
+            if !num.is_empty() {
+                r.store_ref = Some(num);
+            }
+            continue;
+        }
         if up.contains("BALANCE DUE") {
             if let Some(v) = tail_money(l) {
                 r.total_cents = Some(v);

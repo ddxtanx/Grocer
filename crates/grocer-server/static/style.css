@@ -1,0 +1,23 @@
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body { font: 15px/1.45 system-ui, sans-serif; margin: 0 auto; max-width: 880px; padding: 0 12px 60px; }
+header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 10px 0; }
+h1 { font-size: 1.3rem; margin: 0; }
+nav button { background: none; border: 1px solid #999; border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+nav button.on { background: #222; color: #fff; }
+textarea, input, select { font: inherit; padding: 5px; max-width: 100%; }
+textarea { width: 100%; }
+button { padding: 6px 12px; cursor: pointer; }
+table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+th, td { border: 1px solid #9995; padding: 4px 7px; text-align: left; }
+td input { width: 100%; }
+.lowconf { background: #ffd8d8; }
+.issues { background: #fff3cd; padding: 8px; border-radius: 6px; }
+.issues li { margin: 2px 0; }
+#toast { position: fixed; bottom: 10px; right: 10px; background: #222; color: #fff;
+         padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .4s; }
+#toast.show { opacity: .92; }
+.verdict-OVERCHARGE { color: #b00020; font-weight: 700; }
+.verdict-MATCH { color: #1a7f37; }
+.planstop { border-left: 4px solid #888; padding-left: 10px; margin: 10px 0; }
+small.mut { color: #888; }
