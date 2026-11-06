@@ -66,6 +66,24 @@ flow is real and exercised by the E2E tools. The planned Leptos/Trunk
 upgrade is a UI-surface change only: the API, the WASM parser ABI, and the
 data model stay identical. Trunk is not in the sandbox image yet.
 
+## Scraper reality check (2026-11-06 probe)
+
+Server-side `ureq` scraping of the local chains does not work: **shopcub.com is a
+parked domain** (Cub's storefront is cub.com, an Albertsons-style JS SPA),
+**Fresh Thyme** is a mi9cloud JS microsite (`/sm/` paths), and Trader Joe's
+publishes no online prices at all. These sites sit behind JS rendering and
+aggressive bot walls; a polite sidecar gets nothing parseable.
+
+Revised plan (matches the project's core pattern — heavy work moves to the
+device): chain catalog fetch becomes a **browser-side module** in the PWA,
+fetching from the user's own browser session (same principle as Open Food
+Facts lookups staying on-device). Parser modules are pure functions over the
+fetched DOM, unit-tested against saved fixtures, and results POST to
+`/api/price-checks`/observations with `source='scraper'` — the receipts-outrank
+rule is already live and enforced server-side (proven end-to-end). The
+`grocer-scraper` sidecar remains for any future chain that *does* serve static
+HTML (weekly-ad sites, APIs that opt in).
+
 ## Out of scope (by design)
 
 No image storage, no external APIs called from the server, no cloud OCR.
