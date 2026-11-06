@@ -2,3 +2,4 @@ target/
 .pgdata/
 cookies.txt
 .env
+crates/grocer-server/static/test_*.jpg
