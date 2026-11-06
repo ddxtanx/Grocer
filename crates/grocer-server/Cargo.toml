@@ -1,0 +1,15 @@
+[package]
+name = "grocer-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+grocer-parser = { path = "../grocer-parser" }
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "migrate"] }
+serde.workspace = true
+serde_json.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
+argon2 = "0.5"
+sha2 = "0.10"
