@@ -36,8 +36,8 @@ Privacy-first grocery receipt & price planning. Self-hosted; small trusted group
 
 ```sh
 # one command: backend binary + browser WASM, wasm auto-linked into static/
-./build.sh              # debug server + release wasm
-./build.sh --release    # release server too
+./build.sh              # release server + release wasm
+./build.sh --debug      # debug server for a fast dev loop
 ./build.sh --test       # then: cargo tests + headless wasm smoke + E2E
 
 # database (first time)
@@ -46,8 +46,13 @@ pg_ctl -D .pgdata -o "-p 5435 -k /tmp -c listen_addresses=localhost" start
 psql -h /tmp -p 5435 -U postgres -c "CREATE ROLE grocer LOGIN PASSWORD 'grocer';"
 psql -h /tmp -p 5435 -U postgres -c "CREATE DATABASE grocer OWNER grocer;"
 
-# server (migrations run automatically, opens http://127.0.0.1:8787)
-DATABASE_URL=postgres://grocer:grocer@localhost:5435/grocer ./target/debug/grocer-server
+# configuration: copy the example, edit to taste; both binaries load .env
+# from the repo root (real env vars win). HOST controls the bind address —
+# default 127.0.0.1; set 0.0.0.0 or a LAN address to serve other devices.
+cp .env.example .env
+
+# server (migrations run automatically; binds HOST:PORT from .env)
+./target/release/grocer-server
 
 # headless end-to-end checks (needs server + DB running; also run by --test)
 node tools/wasm_smoke.js        # WASM artifact vs the real receipt corpus

@@ -3,9 +3,12 @@ use sqlx::PgPool;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
     let args: Vec<String> = std::env::args().collect();
-    let db_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://grocer:grocer@localhost:5435/grocer".into());
+    let db_url = std::env::var("DATABASE_URL").map_err(|_| {
+        "DATABASE_URL not set — copy .env.example to .env in the repo root, or export it"
+            .to_string()
+    })?;
 
     let chain: Box<dyn ChainCatalog> = match args.get(1).map(|s| s.as_str()) {
         Some("fixture") => Box::new(FixtureChain {

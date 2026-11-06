@@ -13,8 +13,17 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let db_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://grocer:grocer@localhost:5433/grocer".into());
+    // Load .env from the working directory (repo root) if present; real env
+    // vars always win over .env values. See .env.example.
+    dotenvy::dotenv().ok();
+
+    // Credentials never live in source: DATABASE_URL must come from the real
+    // environment or a .env file next to the working directory.
+    let db_url = std::env::var("DATABASE_URL").map_err(|_| {
+        "DATABASE_URL not set — copy .env.example to .env in the repo root, or export it"
+            .to_string()
+    })?;
+    let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".into());
     let port: u16 = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
@@ -60,8 +69,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_state(AppState { pool });
 
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
-    println!("grocer-server listening on http://127.0.0.1:{port}");
+    let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
+    println!("grocer-server listening on http://{host}:{port}");
     axum::serve(listener, app).await?;
     Ok(())
 }

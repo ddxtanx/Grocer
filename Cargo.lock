@@ -489,6 +489,7 @@ name = "grocer-scraper"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "dotenvy",
  "serde_json",
  "sqlx",
  "tokio",
@@ -502,6 +503,7 @@ dependencies = [
  "argon2",
  "axum",
  "chrono",
+ "dotenvy",
  "grocer-parser",
  "serde",
  "serde_json",

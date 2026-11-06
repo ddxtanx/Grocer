@@ -2,8 +2,8 @@
 # Build the whole app: backend binary + in-browser WASM parser, and place the
 # wasm where the backend serves it (crates/grocer-server/static/).
 #
-#   ./build.sh            # debug server + release wasm (fast dev loop)
-#   ./build.sh --release  # release server too
+#   ./build.sh            # release server + release wasm (the default)
+#   ./build.sh --debug    # debug server for a fast dev loop
 #   ./build.sh --test     # after building: cargo tests + headless wasm/E2E checks
 #
 # The frontend is static files — no bundler step. The wasm artifact name here
@@ -12,13 +12,13 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SERVER_PROFILE="debug"
+SERVER_PROFILE="release"
 RUN_TESTS=0
 for arg in "$@"; do
   case "$arg" in
-    --release) SERVER_PROFILE="release" ;;
+    --debug)   SERVER_PROFILE="debug" ;;
     --test)    RUN_TESTS=1 ;;
-    *) echo "usage: $0 [--release] [--test]" >&2; exit 2 ;;
+    *) echo "usage: $0 [--debug] [--test]" >&2; exit 2 ;;
   esac
 done
 
@@ -59,7 +59,10 @@ echo
 echo "built:"
 ls -la "$BIN" "$WASM_DEST"
 echo
-echo "run:  DATABASE_URL=postgres://grocer:grocer@localhost:5435/grocer PORT=8787 $BIN"
+if [ ! -f .env ]; then
+  echo "note: no .env in repo root — copy .env.example to .env (DATABASE_URL, HOST, PORT)"
+fi
+echo "run:  $BIN"
 
 if [ "$RUN_TESTS" = 1 ]; then
   echo "==> cargo test --workspace"

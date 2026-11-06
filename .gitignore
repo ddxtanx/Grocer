@@ -1,3 +1,4 @@
 target/
 .pgdata/
 cookies.txt
+.env
