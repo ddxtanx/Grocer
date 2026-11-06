@@ -1033,3 +1033,176 @@ pub async fn trip_price_integrity(
         json!({ "verdicts": verdicts, "unmatched_checks": unmatched }),
     ))
 }
+
+// ---------- local VLM receipt parsing (opt-in quality path) ----------
+//
+// The privacy stance holds: the image goes to the user's OWN Strata server
+// on their LAN (VLM_URL in .env), is never persisted here, and the model's
+// answer is a CANDIDATE — the same arithmetic checksums gate it that gate
+// the OCR templates. Model proposes, arithmetic disposes.
+
+#[derive(Deserialize)]
+pub struct VlmReq {
+    pub image_b64: String,
+    pub mime: Option<String>,
+}
+
+const VLM_SYSTEM: &str = r#"You are a receipt parser. Output ONLY a JSON object — no prose, no markdown fences.
+Schema (ALL money values are INTEGER CENTS):
+{"chain":"costco"|"trader_joes"|"fresh_thyme"|"unknown",
+ "store_name":string|null,"store_addr":string|null,"store_ref":string|null,
+ "occurred_at":"YYYY-MM-DDTHH:MM:SS"|null,
+ "txn_ref":string|null,
+ "lines":[{"seq":1,"raw_name":"exact printed name","store_item_code":string|null,
+   "discount_ref":null,"qty_count":int|null,"qty_grams":number|null,
+   "unit_basis":"EA"|"LB"|"G"|"OZ"|null,"unit_price_cents":int|null,
+   "line_total_cents":int,"savings_cents":int|null,"flags":[],
+   "department":string|null,"confidence":0.9}],
+ "subtotal_cents":int|null,"tax_cents":int|null,"tax_rate_milli_pct":int|null,
+ "total_cents":int|null,
+ "total_source":"printed"|"inferred_from_payment"|"inferred_from_subtotal_tax"|"missing",
+ "discount_total_cents":int|null,"item_count":int|null,
+ "issues":[],"parser_version":"vlm","raw_text":""}
+Rules:
+- Transcribe EVERY printed item line; copy raw_name exactly as printed.
+- Convert weights to grams (1 lb = 453.59 g, 1 oz = 28.35 g).
+- repeated identical item lines: ONE line with qty_count = repetition count.
+- If the printed total is crossed out or unreadable, infer it from the payment block
+  (card/debit amount) and set total_source to "inferred_from_payment".
+- tax_rate_milli_pct: percent × 1000 (9.025% -> 9025).
+- Only item lines; do NOT include payment/tender/subtotal/tax as lines.
+- Never invent values; use null when not visible. Guess nothing.
+- NEVER include membership numbers, card numbers or account numbers anywhere."#;
+
+/// Drop digit runs of 12+ (membership/PAN-shaped) from free-text fields,
+/// keeping chain item codes (<= 8 digits) intact.
+fn scrub_long_digits(s: &str) -> String {
+    let mut out = String::new();
+    let mut run = String::new();
+    for c in s.chars().chain(std::iter::once('\0')) {
+        if c.is_ascii_digit() {
+            run.push(c);
+        } else {
+            if run.len() >= 12 {
+                out.push_str("[REDACTED]");
+            } else {
+                out.push_str(&run);
+            }
+            run.clear();
+            if c != '\0' {
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+pub async fn vlm_parse(
+    State(_st): State<AppState>,
+    _authed: Authed,
+    Json(req): Json<VlmReq>,
+) -> ApiResult<Json<ParsedReceipt>> {
+    let base = std::env::var("VLM_URL").map_err(|_| {
+        AppError::Internal(
+            "VLM_URL not set — add it to .env (e.g. http://127.0.0.1:8079/v1)".into(),
+        )
+    })?;
+    let key = std::env::var("VLM_API_KEY").unwrap_or_default();
+    let model = std::env::var("VLM_MODEL").unwrap_or_else(|_| "qwen3.8-flash-next".into());
+    let mime = req.mime.clone().unwrap_or_else(|| "image/jpeg".into());
+    let url = format!("{}/chat/completions", base.trim_end_matches('/'));
+
+    let payload = json!({
+        "model": model,
+        "temperature": 0.0,
+        "max_tokens": 4000,
+        "messages": [
+            { "role": "system", "content": VLM_SYSTEM },
+            { "role": "user", "content": [
+                { "type": "text", "text": "Extract this grocery receipt to the JSON schema." },
+                { "type": "image_url", "image_url": { "url": format!("data:{mime};base64,{}", req.image_b64) } }
+            ] }
+        ]
+    });
+
+    let raw = tokio::task::spawn_blocking(move || -> Result<String, AppError> {
+        let agent = ureq::AgentBuilder::new()
+            .timeout_read(std::time::Duration::from_secs(300))
+            .timeout_connect(std::time::Duration::from_secs(10))
+            .build();
+        let resp = agent
+            .post(&url)
+            .set("Authorization", &format!("Bearer {key}"))
+            .set("Content-Type", "application/json")
+            .send_string(&payload.to_string())
+            .map_err(|e| AppError::Internal(format!("VLM request to {url} failed: {e}")))?;
+        let text = resp
+            .into_string()
+            .map_err(|e| AppError::Internal(format!("VLM body unreadable: {e}")))?;
+        let body: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| AppError::Internal(format!("VLM response was not JSON: {e}")))?;
+        body["choices"][0]["message"]["content"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "VLM response missing content: {}",
+                    &body.to_string()[..500.min(body.to_string().len())]
+                ))
+            })
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("vlm task join: {e}")))??;
+
+    let stripped = raw
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim()
+        .to_string();
+    // Model never owns issues or parser metadata — strip them before typed
+    // parse so junk variants in those fields can't reject an otherwise good parse.
+    let mut value: serde_json::Value = serde_json::from_str(&stripped).map_err(|e| {
+        let head: String = stripped.chars().take(300).collect();
+        AppError::Unprocessable(format!(
+            "model output not valid JSON ({e}) — model said: {head}"
+        ))
+    })?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("issues".into(), serde_json::json!([]));
+        obj.insert("parser_version".into(), serde_json::json!("vlm"));
+        obj.insert("raw_text".into(), serde_json::json!(""));
+    }
+    let mut receipt: ParsedReceipt = serde_json::from_value(value).map_err(|e| {
+        let head: String = stripped.chars().take(300).collect();
+        AppError::Unprocessable(format!(
+            "model JSON doesn't fit receipt schema ({e}) — model said: {head}"
+        ))
+    })?;
+
+    // defense in depth against PII regardless of model behavior
+    for s in [
+        &mut receipt.txn_ref,
+        &mut receipt.store_ref,
+        &mut receipt.store_name,
+    ] {
+        if let Some(v) = s {
+            *v = scrub_long_digits(v);
+        }
+    }
+    for l in &mut receipt.lines {
+        l.raw_name = scrub_long_digits(&l.raw_name);
+    }
+    receipt.raw_text = String::new(); // OCR text stays on the model's transcript; nothing persisted here
+    receipt.parser_version = format!("vlm:{model}");
+    receipt.issues = grocer_parser::verify(&receipt);
+    if receipt.lines.is_empty() {
+        receipt.issue(
+            grocer_parser::IssueKind::ParsedNothing,
+            "model returned no item lines",
+        );
+    }
+    tracing::info!(lines = receipt.lines.len(), chain = ?receipt.chain, "vlm parse");
+    Ok(Json(receipt))
+}

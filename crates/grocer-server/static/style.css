@@ -11,9 +11,15 @@ button { padding: 6px 12px; cursor: pointer; }
 table { border-collapse: collapse; width: 100%; margin: 8px 0; }
 th, td { border: 1px solid #9995; padding: 4px 7px; text-align: left; }
 td input { width: 100%; }
-.lowconf { background: #ffd8d8; }
-.issues { background: #fff3cd; padding: 8px; border-radius: 6px; }
+.lowconf { background: #ffd8d8; color: #201010; }
+.issues { background: #fff3cd; color: #241d05; padding: 8px; border-radius: 6px; }
 .issues li { margin: 2px 0; }
+@media (prefers-color-scheme: dark) {
+  /* the page follows the OS scheme; fixed pastel backgrounds with inherited
+     light text are illegible in dark mode — pin both sides of the contrast */
+  .lowconf { background: #4a1f1f; color: #ffd7d7; }
+  .issues  { background: #3a2f14; color: #ffe9a8; }
+}
 #toast { position: fixed; bottom: 10px; right: 10px; background: #222; color: #fff;
          padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .4s; }
 #toast.show { opacity: .92; }

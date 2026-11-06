@@ -181,3 +181,21 @@ fn unknown_chain_yields_no_lines() {
     assert_eq!(r.chain, Chain::Unknown);
     assert!(has_issue(&r, IssueKind::ParsedNothing));
 }
+
+#[test]
+fn detects_costco_from_mangled_header_ocr() {
+    // Real OCR tail captured from a user scan: header/logo read as garbage,
+    // footer trio intact. Detection must not depend on the header word.
+    let ocr = "— ~ TOTAL TAX 3.32\n\
+               — TOTAL NUMBER OF ITEMS SOLD = 17 .\n\
+               x INSTANT SAVINGS $ 5.00 -\n\
+               - \\YIRANPIYIE 17:47 652 4 522 24\n\
+               QT |\n\
+               OP#: 24 Name: LUCAS J.\n\
+               - Thank You! i\n\
+               Please Come Again E\n\
+               Whse:652 Trm:4 Trn:522 OP:24 v\n\
+               Items Sold: 17\n\
+               4Y 02/21/2026 17:47 \u{a9}";
+    assert_eq!(grocer_parser::detect(ocr), grocer_parser::Chain::Costco);
+}

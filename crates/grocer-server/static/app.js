@@ -80,6 +80,7 @@ let P = null, ocrWorker = null;
 $('#photo').addEventListener('change', () => { $('#ocrbtn').disabled = !$('#photo').files[0]; });
 $('#ocrbtn').addEventListener('click', async () => {
   const file = $('#photo').files[0]; if (!file) return;
+  if ($('#engine').value === 'vlm') return vlmScan(file);
   try {
     console.info('tesseract.js', Tesseract.version);
     status('#scanstatus', 'Starting OCR engine (~11 MB language pack, first run)…');
@@ -100,6 +101,36 @@ $('#ocrbtn').addEventListener('click', async () => {
     status('#scanstatus', `OCR done — ${text.split('\n').length} lines. Review/fix the text, then parse.`);
   } catch (e) { status('#scanstatus', 'OCR failed: ' + fmtErr(e)); }
 });
+async function vlmScan(file) {
+  try {
+    status('#scanstatus', 'Shrinking image & sending to local Qwen vision (Strata)…');
+    const blob = await shrinkToJpeg(file, 1600);
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    let bin = ''; for (let i = 0; i < buf.length; i += 0x8000)
+      bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+    const r = await api('/api/vlm_parse', { method: 'POST',
+      body: JSON.stringify({ image_b64: btoa(bin), mime: 'image/jpeg' }) });
+    P = r; renderReview();
+    status('#scanstatus', 'Parsed by local Qwen vision — arithmetic re-verified on the server; image not stored');
+  } catch (e) {
+    status('#scanstatus', 'VLM failed: ' + fmtErr(e) + (e && e.network ? ' (server unreachable?)' : ''));
+  }
+}
+function shrinkToJpeg(file, maxDim) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      c.toBlob(b => b ? res(b) : rej(new Error('canvas encode failed')), 'image/jpeg', 0.85);
+    };
+    img.onerror = () => rej(new Error('image decode failed'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
 // ---- parser: WASM in-browser first (grocer-parser crate, same code as the
 // server's); server round-trip only as fallback if the wasm module fails to load
 let WP;

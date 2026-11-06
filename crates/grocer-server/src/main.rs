@@ -46,6 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/receipts/{id}", get(api::receipt_detail))
         .route("/api/parse_text", post(api::parse_text))
+        .route("/api/vlm_parse", post(api::vlm_parse))
         .route(
             "/api/products",
             post(api::create_product).get(api::search_products),

@@ -34,6 +34,12 @@
 <!-- ============ SCAN ============ -->
 <div class="tab" id="tab-scan">
   <input type="file" id="photo" accept="image/*">
+  <label>Engine:
+    <select id="engine">
+      <option value="ocr">On-device OCR (nothing leaves this device)</option>
+      <option value="vlm">Local Qwen vision — Strata on my LAN</option>
+    </select>
+  </label>
   <div id="scanstatus"></div>
   <div><button id="ocrbtn" disabled>Run OCR</button></div>
   <textarea id="rawtext" rows="12" placeholder="OCR text appears here; you can paste/fix it by hand"></textarea>
