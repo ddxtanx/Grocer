@@ -35,12 +35,10 @@ Privacy-first grocery receipt & price planning. Self-hosted; small trusted group
 ## Build & run
 
 ```sh
-# native tests
-cargo test --workspace
-
-# WASM parser artifact (needs the wasm32-unknown-unknown target)
-cargo build -p grocer-wasm --target wasm32-unknown-unknown --release
-cp target/wasm32-unknown-unknown/release/grocer_wasm.wasm crates/grocer-server/static/grocer-parser.wasm
+# one command: backend binary + browser WASM, wasm auto-linked into static/
+./build.sh              # debug server + release wasm
+./build.sh --release    # release server too
+./build.sh --test       # then: cargo tests + headless wasm smoke + E2E
 
 # database (first time)
 initdb -D .pgdata -U postgres --auth=trust
@@ -51,7 +49,7 @@ psql -h /tmp -p 5435 -U postgres -c "CREATE DATABASE grocer OWNER grocer;"
 # server (migrations run automatically, opens http://127.0.0.1:8787)
 DATABASE_URL=postgres://grocer:grocer@localhost:5435/grocer ./target/debug/grocer-server
 
-# headless end-to-end checks (needs server + DB running)
+# headless end-to-end checks (needs server + DB running; also run by --test)
 node tools/wasm_smoke.js        # WASM artifact vs the real receipt corpus
 node tools/e2e_wasm_client.js   # WASM parse -> ingest -> totals for all chains
 
