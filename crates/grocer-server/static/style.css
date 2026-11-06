@@ -27,3 +27,4 @@ td input { width: 100%; }
 .verdict-MATCH { color: #1a7f37; }
 .planstop { border-left: 4px solid #888; padding-left: 10px; margin: 10px 0; }
 small.mut { color: #888; }
+.del { background: none; border: 1px solid #9995; color: inherit; border-radius: 4px; cursor: pointer; padding: 2px 6px; }

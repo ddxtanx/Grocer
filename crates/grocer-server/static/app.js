@@ -168,8 +168,54 @@ $('#parsebtn').addEventListener('click', async () => {
   } catch (e) { toast('Parse failed: ' + e.message); }
 });
 
+// Discount lines printed as standalone negatives (Costco `5.00-` coupon,
+// instant-savings rows) are not items: fold them into the nearest preceding
+// positive line as savings. Manual deletes of such rows do the same.
+function foldDiscountRows() {
+  let folded = [];
+  P.lines = P.lines.filter((l, i) => {
+    if (l.line_total_cents >= 0) return true;
+    // receipt semantics: a standalone negative line belongs to the nearest
+    // positive line above it; discount_ref (when present) points at the code
+    const withCode = P.lines.slice(0, i).reverse()
+      .find(x => x.line_total_cents > 0 && l.discount_ref && x.store_item_code === l.discount_ref);
+    const above = withCode || P.lines.slice(0, i).reverse().find(x => x.line_total_cents > 0);
+    if (above) {
+      above.line_total_cents += l.line_total_cents;
+      above.savings_cents = (above.savings_cents || 0) - l.line_total_cents;
+      folded.push(l.raw_name);
+      return false;
+    }
+    return true; // nothing to fold into: leave visible for manual fix
+  });
+  if (folded.length) {
+    P.lines.forEach((l, j) => l.seq = j + 1);
+    P.issues.push({ kind: 'info', detail: 'folded discount lines into the line above: ' + folded.join(', ') });
+  }
+  return folded;
+}
+
+// client-side mirror of the server arithmetic gate, for instant feedback
+function recheck() {
+  const iss = [];
+  const sum = P.lines.reduce((a, l) => a + l.line_total_cents, 0);
+  if (P.subtotal_cents != null && sum !== P.subtotal_cents)
+    iss.push({ kind: 'sum_mismatch', detail: `lines sum ${sum} vs subtotal ${P.subtotal_cents}` });
+  if (P.total_cents != null && P.tax_cents != null && P.subtotal_cents != null &&
+      P.subtotal_cents + P.tax_cents !== P.total_cents)
+    iss.push({ kind: 'tax_mismatch', detail: `subtotal+tax != total` });
+  for (const l of P.lines) {
+    if (l.qty_count && l.unit_price_cents != null &&
+        Math.abs(l.qty_count * l.unit_price_cents - l.line_total_cents) > 1)
+      iss.push({ kind: 'line_math_mismatch', detail: `#${l.seq} ${l.qty_count} x ${l.unit_price_cents} != ${l.line_total_cents}` });
+  }
+  P.issues = iss;
+}
+
 function renderReview() {
-  const hard = P.issues.filter(i => ['SumMismatch', 'LineMathMismatch', 'TaxMismatch'].includes(i.kind));
+  const hard = P.issues.filter(i => ['sum_mismatch', 'line_math_mismatch', 'tax_mismatch',
+                                     'SumMismatch', 'LineMathMismatch', 'TaxMismatch'].includes(i.kind));
+  if (!P._folded) { foldDiscountRows(); P._folded = true; }
   const storeSel = document.createElement('select'); storeSel.id = 'rv-store';
   storeOptions(storeSel, P.store_ref);
   $('#review').innerHTML = `
@@ -191,8 +237,9 @@ function renderReview() {
       <td><input data-f="qty_count" data-i="${i}" size="3" value="${l.qty_count ?? ''}"></td>
       <td><input data-f="unit" data-i="${i}" size="5" value="${money(l.unit_price_cents)}"></td>
       <td><input data-f="total" data-i="${i}" size="5" value="${money(l.line_total_cents)}"></td>
-      <td>${money(l.savings_cents)}</td>
-      <td><small class="mut">${esc((l.department || '') + ' ' + (l.flags || []).join(','))}</small></td></tr>`).join('')}
+      <td><input data-f="savings" data-i="${i}" size="5" value="${money(l.savings_cents)}"></td>
+      <td><small class="mut">${esc((l.department || '') + ' ' + (l.flags || []).join(','))}</small></td>
+      <td><button class="del" data-i="${i}" title="remove line (discount lines fold into the line above)">&#10005;</button></td></tr>`).join('')}
     </table>`;
   $('#review').insertBefore(storeSel, $('#review').querySelector('div:nth-of-type(2)'));
   $('#rv-table').addEventListener('input', e => {
@@ -203,6 +250,21 @@ function renderReview() {
     else if (f === 'qty_count') l.qty_count = e.target.value === '' ? null : parseInt(e.target.value, 10);
     else if (f === 'unit') l.unit_price_cents = toCents(e.target.value);
     else if (f === 'total') l.line_total_cents = toCents(e.target.value) ?? 0;
+    else if (f === 'savings') l.savings_cents = toCents(e.target.value);
+  });
+  $('#rv-table').addEventListener('click', e => {
+    const b = e.target.closest('button.del'); if (!b) return;
+    const i = +b.dataset.i, l = P.lines[i];
+    if (l.line_total_cents < 0) { // deleting a discount line: fold like the parser does
+      const above = P.lines.slice(0, i).reverse().find(x => x.line_total_cents > 0);
+      if (above) {
+        above.line_total_cents += l.line_total_cents;
+        above.savings_cents = (above.savings_cents || 0) - l.line_total_cents;
+      }
+    }
+    P.lines.splice(i, 1);
+    P.lines.forEach((x, j) => x.seq = j + 1);
+    recheck(); renderReview();
   });
   $('#rv-save').addEventListener('click', saveReceipt);
 }
@@ -214,10 +276,14 @@ async function saveReceipt() {
   P.tax_cents = toCents($('#rv-tax').value);
   P.total_cents = toCents($('#rv-tot').value);
   P.occurred_at = $('#rv-when').value || null;
-  const payload = { store_id: sid, receipt: P };
+  // the server re-verifies and owns issues; strip client-only notes and
+  // bookkeeping keys that aren't part of the Rust schema
+  const wire = { ...P, issues: P.issues.filter(i => i.kind !== 'info') };
+  delete wire._folded;
+  const payload = { store_id: sid, receipt: wire };
   try {
     const trip = await api('/api/trips', { method: 'POST', body: JSON.stringify({ store_id: sid, occurred_at: P.occurred_at || new Date().toISOString() }) });
-    const out = await api('/api/receipts', { method: 'POST', body: JSON.stringify({ trip_id: trip.id, store_id: sid, receipt: P }) });
+    const out = await api('/api/receipts', { method: 'POST', body: JSON.stringify({ trip_id: trip.id, store_id: sid, receipt: wire }) });
     toast(out.deduplicated ? `Already scanned (receipt #${out.receipt_id})` :
       `Saved receipt #${out.receipt_id}` + (out.issues.length ? ` — notes: ${out.issues.join(' | ')}` : ''));
     P = null; $('#review').innerHTML = '';
