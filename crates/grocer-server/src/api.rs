@@ -1112,10 +1112,15 @@ pub async fn vlm_parse(
     let mime = req.mime.clone().unwrap_or_else(|| "image/jpeg".into());
     let url = format!("{}/chat/completions", base.trim_end_matches('/'));
 
+    // qwen3.8-flash-next on strata is a thinking model: content stays null
+    // until reasoning finishes, and extraction doesn't need chain-of-thought.
+    // VLM_THINKING=on re-enables it; default off (verified: reasoning_len=0).
+    let thinking = std::env::var("VLM_THINKING").is_ok_and(|v| v == "on");
     let payload = json!({
         "model": model,
         "temperature": 0.0,
-        "max_tokens": 4000,
+        "max_tokens": 6000,
+        "chat_template_kwargs": { "enable_thinking": thinking },
         "messages": [
             { "role": "system", "content": VLM_SYSTEM },
             { "role": "user", "content": [
@@ -1141,15 +1146,17 @@ pub async fn vlm_parse(
             .map_err(|e| AppError::Internal(format!("VLM body unreadable: {e}")))?;
         let body: serde_json::Value = serde_json::from_str(&text)
             .map_err(|e| AppError::Internal(format!("VLM response was not JSON: {e}")))?;
-        body["choices"][0]["message"]["content"]
-            .as_str()
-            .map(|s| s.to_string())
-            .ok_or_else(|| {
-                AppError::Internal(format!(
-                    "VLM response missing content: {}",
-                    &body.to_string()[..500.min(body.to_string().len())]
-                ))
-            })
+        let msg = &body["choices"][0]["message"];
+        match msg["content"].as_str() {
+            Some(c) => Ok(c.to_string()),
+            None => {
+                let rc = msg["reasoning_content"].as_str().unwrap_or("");
+                Err(AppError::Internal(format!(
+                    "VLM returned no final content (thinking likely exhausted the token budget; {} reasoning chars)",
+                    rc.len()
+                )))
+            }
+        }
     })
     .await
     .map_err(|e| AppError::Internal(format!("vlm task join: {e}")))??;
