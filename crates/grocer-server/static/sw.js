@@ -1,7 +1,7 @@
 // Offline shell: pre-cache the entire on-device pipeline (app + WASM parser +
 // Tesseract core + English model ~20 MB) so scanning works in an airplane
 // grocery aisle with zero signal. API calls always go to the network.
-const CACHE = 'grocer-v1';
+const CACHE = 'grocer-v2';
 const PRECACHE = [
   '/', '/app.js', '/style.css', '/manifest.json',
   '/grocer-parser.wasm',

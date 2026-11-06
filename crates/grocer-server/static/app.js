@@ -65,6 +65,15 @@ function storeOptions(sel, matchRef) {
 }
 function fillStoreSelects() { storeOptions($('#st-store'), null); }
 
+// tesseract.js sometimes rejects with a bare string/undefined — e.message
+// alone would show "undefined". Always surface the real payload.
+function fmtErr(e) {
+  if (!e) return String(e);
+  if (e.message) return e.message;
+  if (e.stack) return e.stack.split('\n')[0];
+  try { return typeof e === 'string' ? e : JSON.stringify(e); } catch (_) { return String(e); }
+}
+
 // ================= SCAN TAB =================
 let P = null, ocrWorker = null;
 
@@ -75,6 +84,9 @@ $('#ocrbtn').addEventListener('click', async () => {
     status('#scanstatus', 'Starting OCR engine (~11 MB language pack, first run)…');
     ocrWorker = await Tesseract.createWorker('eng', 1, {
       workerPath: '/vendor/worker.min.js',
+      // plain same-origin worker: blob-URL workers (tesseract's default)
+      // trip Firefox fingerprinting-resistance / strict privacy settings
+      workerBlobURL: false,
       corePath: '/vendor/',
       langPath: '/vendor/tessdata',
       cacheMethod: 'none',
@@ -85,7 +97,7 @@ $('#ocrbtn').addEventListener('click', async () => {
     $('#rawtext').value = text;
     $('#parsebtn').disabled = !text.trim();
     status('#scanstatus', `OCR done — ${text.split('\n').length} lines. Review/fix the text, then parse.`);
-  } catch (e) { status('#scanstatus', 'OCR failed: ' + e.message); }
+  } catch (e) { status('#scanstatus', 'OCR failed: ' + fmtErr(e)); }
 });
 // ---- parser: WASM in-browser first (grocer-parser crate, same code as the
 // server's); server round-trip only as fallback if the wasm module fails to load
@@ -288,7 +300,8 @@ $('#st-photo').addEventListener('change', async () => {
   try {
     status('#st-status', 'OCR’ing tag…');
     const w = await Tesseract.createWorker('eng', 7, {
-      workerPath: '/vendor/worker.min.js', corePath: '/vendor/', langPath: '/vendor/tessdata',
+      workerPath: '/vendor/worker.min.js',
+      workerBlobURL: false, corePath: '/vendor/', langPath: '/vendor/tessdata',
       cacheMethod: 'none', logger: m => status('#st-status', 'tag OCR: ' + (m.status || '')),
     });
     const { data: { text } } = await w.recognize(file);
@@ -301,7 +314,7 @@ $('#st-photo').addEventListener('change', async () => {
     $('#st-cands').innerHTML = 'Pick the advertised price: ' + [...seen].sort((a, b) => a - b).map(c =>
       `<button data-adv="${c}">$${money(c)}</button>`).join(' ') || '<b>No prices found — retake photo.</b>';
     status('#st-status', `${seen.size} price candidate(s) from tag text.`);
-  } catch (e) { status('#st-status', 'OCR failed: ' + e.message); }
+  } catch (e) { status('#st-status', 'OCR failed: ' + fmtErr(e)); }
 });
 $('#st-cands').addEventListener('click', e => {
   if (!e.target.dataset.adv) return;
